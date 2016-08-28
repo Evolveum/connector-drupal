@@ -11,3 +11,10 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 /target/
+/.idea
+
+# customers config - don't commit !!!
+test.properties
+/connector-drupal.iml
+/make.bat
+/makeDebug.bat
