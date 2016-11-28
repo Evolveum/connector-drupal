@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>connector-drupal</artifactId>
-    <version>0.8.0.0-SNAPSHOT</version>
+    <version>0.9.0.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>Drupal Connector</name>

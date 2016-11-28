@@ -63,9 +63,9 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
     private String[] taxonomies;
 
     /**
-     * If taxonomy name not found in drupal, create it & use it (default = true), elsewhere throw InvalidAttributeValueException.
+     * If taxonomy name for these taxonomy machine names not found in drupal, create it, elsewhere throw InvalidAttributeValueException (read only).
      */
-    private boolean createTaxonomyWhenNameNotExists = true;
+    private String[] createTaxonomyWhenNameNotExists;
 
     /**
      * Array of node types (content types), for example:
@@ -78,10 +78,29 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
     private String[] nodes;
 
     /**
+     * If node name not found in drupal for these content type, create it, elsewhere throw InvalidAttributeValueException (read only).
+     */
+    private String[] createNodeWhenTitleNotExists;
+
+    /**
      * Array of required custom fields, for example 'field_first_name'. If field not set throws InvalidAttributeValueException.
      */
     private String[] requiredFields;
 
+    /**
+     * if true, ignore in cache content Type/machine name mismatch and return null, elsewhere InvalidAttributeValueException is returned
+     */
+    private Boolean ignoreTypeMismatch = false;
+
+    /**
+     * if true, when GET of not existing taxonomy term returned 500, transformed to UnknownUidException (workaround for Drupal bug)
+     */
+    private Boolean handle500asUnknownUidException = false;
+
+    /**
+     * if true, reading admin user details is skipped (only cache is created)
+     */
+    private Boolean skipTestConnection = false;
 
     /* * * * * * * * * * * * * * * * * * *
     only parsed metadatas from configuration
@@ -91,6 +110,11 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
      * which user custom fields and which appropriated nud key is used
      */
     private Map<String, String> userMetadatas;
+
+    /**
+     * list of single valued user fields
+     */
+    private List<String> singleValueUserFields = new LinkedList<>();
 
     /**
      * which user fields are FILE references
@@ -117,6 +141,15 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
      */
     private Map<String, Map<String, String>> nodesMetadatas;
 
+    /**
+     * which user custom fields to which node type (content type) is referenced (caches nodes)
+     */
+    private Map<String, String> user2nodes = new LinkedHashMap();
+
+    /**
+     * which node type has which KEY (column name instead of title)
+     */
+    private Map<String, String> nodesKeys = new LinkedHashMap();
 
     @Override
     public String toString() {
@@ -135,7 +168,7 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
     void parseMetadatas() {
         taxonomiesMetadatas = parseEntities(taxonomies);
         nodesMetadatas = parseEntities(nodes);
-        userMetadatas = parseFields(userFields, true);
+        userMetadatas = parseFields(userFields, null, true);
     }
 
     private Map<String, Map<String, String>> parseEntities(String[] entities) {
@@ -178,7 +211,7 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
                     continue;
                 }
 
-                fields = parseFields(fieldsMetaDatas, false);
+                fields = parseFields(fieldsMetaDatas, entityName, false);
 
                 entityMetadatas.put(entityName, fields);
             }
@@ -187,7 +220,7 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
         return entityMetadatas;
     }
 
-    private Map<String, String> parseFields(String[] fieldsMetaDatas, boolean user){
+    private Map<String, String> parseFields(String[] fieldsMetaDatas, String entityName, boolean user){
         Map<String, String> fields = new HashMap();
         if (fieldsMetaDatas == null) {
             return fields;
@@ -202,9 +235,23 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
             }
             String fieldName = field[0];
             String fieldNudKey = field[1];
-            if (field.length==3) {
+            if (field.length>=3) {
                 String reference = field[2];
-                user2taxonomies.put(fieldName, reference);
+                if (DrupalConnector.NID.equals(fieldNudKey)) {
+                    user2nodes.put(fieldName, reference);
+                }
+                else if (DrupalConnector.TID.equals(fieldNudKey)) {
+                    user2taxonomies.put(fieldName, reference);
+                }
+                if (entityName != null && DrupalConnector.NODE_KEY.equals(reference)) {
+                    nodesKeys.put(entityName, fieldName);
+                }
+            }
+            if (field.length>=4) {
+                String widgetType = field[3]; // when this is "Select List", we need to send other data when user is created
+                if (widgetType.contains("SINGLE") || widgetType.contains("Select List")) {
+                    singleValueUserFields.add(fieldName);
+                }
             }
 
             fields.put(fieldName, fieldNudKey);
@@ -282,13 +329,43 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
         this.requiredFields = requiredFields;
     }
 
+    @ConfigurationProperty(displayMessageKey = "drupal.config.ignoreTypeMismatch",
+            helpMessageKey = "drupal.config.ignoreTypeMismatch.help")
+    public Boolean getIgnoreTypeMismatch() {
+        return ignoreTypeMismatch;
+    }
+
+    public void setIgnoreTypeMismatch(Boolean ignoreTypeMismatch) {
+        this.ignoreTypeMismatch = ignoreTypeMismatch;
+    }
+
+    @ConfigurationProperty(displayMessageKey = "drupal.config.handle500asUnknownUidException",
+            helpMessageKey = "drupal.config.handle500asUnknownUidException.help")
+    public Boolean getHandle500asUnknownUidException() {
+        return handle500asUnknownUidException;
+    }
+
+    public void setHandle500asUnknownUidException(Boolean handle500asUnknownUidException) {
+        this.handle500asUnknownUidException = handle500asUnknownUidException;
+    }
+
+    @ConfigurationProperty(displayMessageKey = "drupal.config.skipTestConnection",
+            helpMessageKey = "drupal.config.skipTestConnection.help")
+    public Boolean getSkipTestConnection() {
+        return skipTestConnection;
+    }
+
+    public void setSkipTestConnection(Boolean skipTestConnection) {
+        this.skipTestConnection = skipTestConnection;
+    }
+
     @ConfigurationProperty(displayMessageKey = "drupal.config.createTaxonomyWhenNameNotExists",
             helpMessageKey = "drupal.config.createTaxonomyWhenNameNotExists.help")
-    public boolean isCreateTaxonomyWhenNameNotExists() {
+    public String[] getCreateTaxonomyWhenNameNotExists() {
         return createTaxonomyWhenNameNotExists;
     }
 
-    public void setCreateTaxonomyWhenNameNotExists(boolean createTaxonomyWhenNameNotExists) {
+    public void setCreateTaxonomyWhenNameNotExists(String[] createTaxonomyWhenNameNotExists) {
         this.createTaxonomyWhenNameNotExists = createTaxonomyWhenNameNotExists;
     }
 
@@ -308,6 +385,16 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
         return nodesMetadatas;
     }
 
+    @ConfigurationProperty(displayMessageKey = "drupal.config.createNodeWhenTitleNotExists",
+            helpMessageKey = "drupal.config.createNodeWhenTitleNotExists.help")
+    public String[] getCreateNodeWhenTitleNotExists() {
+        return createNodeWhenTitleNotExists;
+    }
+
+    public void setCreateNodeWhenTitleNotExists(String[] createNodeWhenTitleNotExists) {
+        this.createNodeWhenTitleNotExists = createNodeWhenTitleNotExists;
+    }
+
     public Map<String, String> getUser2taxonomies() {
         return user2taxonomies;
     }
@@ -315,4 +402,43 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
     public List<String> getUser2files() {
         return user2files;
     }
+
+    public Map<String, String> getUser2nodes() {
+        return user2nodes;
+    }
+
+    public Map<String, String> getNodesKeys() {
+        return nodesKeys;
+    }
+
+    public List<String> getSingleValueUserFields() {
+        return singleValueUserFields;
+    }
+
+    public boolean isCreateNodeWhenTitleNotExists(String contentType) {
+        if (createNodeWhenTitleNotExists==null || createNodeWhenTitleNotExists.length == 0) {
+            return false;
+        }
+        for (String type : createNodeWhenTitleNotExists){
+            if (contentType.equals(type)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public boolean isCreateTaxonomyWhenNameNotExists(String machineName) {
+        if (createTaxonomyWhenNameNotExists==null || createTaxonomyWhenNameNotExists.length == 0) {
+            return false;
+        }
+        for (String type : createTaxonomyWhenNameNotExists){
+            if (machineName.equals(type)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 }

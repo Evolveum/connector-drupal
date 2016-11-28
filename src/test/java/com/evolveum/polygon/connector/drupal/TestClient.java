@@ -16,6 +16,8 @@
 package com.evolveum.polygon.connector.drupal;
 
 import org.apache.http.HttpResponse;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpDelete;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.util.EntityUtils;
@@ -30,6 +32,8 @@ import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -66,6 +70,7 @@ public class TestClient {
         conf.setTrustAllCertificates(Boolean.parseBoolean(properties.getProperty("trustAllCertificates")));
 
         conf.setUserDeleteDisabled(Boolean.parseBoolean(properties.getProperty("userDeleteDisabled")));
+
         conf.setPageSize(Integer.parseInt(properties.getProperty("pageSize")));
 
         if (properties.containsKey("userFields")) {
@@ -78,9 +83,19 @@ public class TestClient {
             conf.setTaxonomies(taxonomies);
         }
 
-        if (properties.containsKey("nodes")) {
-            String[] nodes = properties.getProperty("nodes").split(";");
-            conf.setNodes(nodes);
+        if (properties.containsKey("createTaxonomyWhenNameNotExists")) {
+            String[] createTaxonomyWhenNameNotExists = properties.getProperty("createTaxonomyWhenNameNotExists").split(";");
+            conf.setCreateTaxonomyWhenNameNotExists(createTaxonomyWhenNameNotExists);
+        }
+
+        if (properties.containsKey("createNodeWhenTitleNotExists")) {
+            String[] createNodeWhenTitleNotExists = properties.getProperty("createNodeWhenTitleNotExists").split(";");
+            conf.setCreateNodeWhenTitleNotExists(createNodeWhenTitleNotExists);
+        }
+
+        if (properties.containsKey("userFields")) {
+            String[] userFields = properties.getProperty("userFields").split(";");
+            conf.setUserFields(userFields);
         }
 
         if (properties.containsKey("requiredFields")) {
@@ -105,7 +120,7 @@ public class TestClient {
     @Test
     public void testGetAdmin() throws IOException {
         HttpGet request = new HttpGet(conf.getServiceAddress() + "/user/1");
-        HttpResponse response = conn.execute(request);
+        CloseableHttpResponse response = conn.execute(request);
         conn.processResponseErrors(response);
         LOG.info("resp: {0}", response);
         String result = EntityUtils.toString(response.getEntity());
@@ -137,7 +152,7 @@ public class TestClient {
     }
 
     @Test
-    public void testParseJson(){
+    public void testParseJson() {
         JSONArray users = new JSONArray("[ {\"uid\": \"1\"}, {\"uid\": \"2\"}]");
         JSONArray emptyUsers = new JSONArray("[]");
     }
@@ -155,7 +170,7 @@ public class TestClient {
         attributes.add(AttributeBuilder.build("field_display_name", "display name"));
         attributes.add(AttributeBuilder.build("field_department", "1308"));
 //        attributes.add(AttributeBuilder.build("field_pub_department", "284")); //Integrations
-        attributes.add(AttributeBuilder.build("field_pub_department"+conn.TRANSFORMED_POSTFIX, "Integrations")); //Integrations
+        attributes.add(AttributeBuilder.build("field_pub_department" + conn.TRANSFORMED_POSTFIX, "Integrations")); //Integrations
         attributes.add(AttributeBuilder.build("field_pub_location", "226"));
         attributes.add(AttributeBuilder.build("field_pub_team", "207"));
 
@@ -172,8 +187,7 @@ public class TestClient {
     }
 
     @Test
-    public void testDeleteUser()
-    {
+    public void testDeleteUser() {
         Uid uid = new Uid("2461");
         conn.delete(accountObjectClass, uid, null);
     }
@@ -190,11 +204,11 @@ public class TestClient {
         attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_THEME, "theme1"));
         attributes.add(AttributeBuilder.build("field_first_name", "first name v2"));
         attributes.add(AttributeBuilder.build("field_display_name", "display name v2"));
-        attributes.add(AttributeBuilder.build("field_department", "1307"));
-        attributes.add(AttributeBuilder.build("field_pub_department"+conn.TRANSFORMED_POSTFIX, "Integrations")); //Integrations
-//        attributes.add(AttributeBuilder.build("field_pub_department", "283"));
-        attributes.add(AttributeBuilder.build("field_pub_location", "173"));
-        attributes.add(AttributeBuilder.build("field_pub_team", "300"));
+//        attributes.add(AttributeBuilder.build("field_department", "1307"));
+//        attributes.add(AttributeBuilder.build("field_pub_department" + conn.TRANSFORMED_POSTFIX, "Integrations")); //Integrations
+////        attributes.add(AttributeBuilder.build("field_pub_department", "283"));
+//        attributes.add(AttributeBuilder.build("field_pub_location", "173"));
+//        attributes.add(AttributeBuilder.build("field_pub_team", "300"));
 
         String[] roles = {"17", "7"};
         attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_ROLES, roles));
@@ -209,8 +223,20 @@ public class TestClient {
     }
 
     @Test
-    public void findByUid()
-    {
+    public void testUpdateUser2() {
+
+        Uid uid = new Uid("2476");
+        //create
+        Set<Attribute> attributes = new HashSet<Attribute>();
+        String randName = "test_conn8v2";// + (new Random()).nextInt();
+        attributes.add(AttributeBuilder.build("field_pub_location", "179"));
+
+        Uid userUid = conn.update(accountObjectClass, uid, attributes, null);
+        LOG.ok("User {0} updated", userUid.getUidValue());
+    }
+
+    @Test
+    public void findByUid() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -221,15 +247,14 @@ public class TestClient {
 
         // searchByUId
         DrupalFilter searchByUid = new DrupalFilter();
-        searchByUid.byUid = "2455";
+        searchByUid.byUid = "2470";
         LOG.ok("start finding");
         conn.executeQuery(accountObjectClass, searchByUid, rh, null);
         LOG.ok("end finding");
     }
 
     @Test
-    public void findByName()
-    {
+    public void findByName() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -245,8 +270,7 @@ public class TestClient {
     }
 
     @Test
-    public void findByMail()
-    {
+    public void findByMail() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -262,8 +286,7 @@ public class TestClient {
     }
 
     @Test
-    public void findAll()
-    {
+    public void findAll() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -278,8 +301,7 @@ public class TestClient {
     }
 
     @Test
-    public void findOnePage()
-    {
+    public void findOnePage() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -302,7 +324,7 @@ public class TestClient {
 
     private static String nodeId = "27506"; //"27506";//"27483"; // Marketing
     private static String nodeName = "test_node";
-    private static final ObjectClass nodeDepartmentObjectClass = new ObjectClass(DrupalConnector.OC_NODE_Prefix+"department");
+    private static final ObjectClass nodeDepartmentObjectClass = new ObjectClass(DrupalConnector.OC_NODE_Prefix + "department");
 
     @Test
     public void testCreateNode() {
@@ -313,7 +335,7 @@ public class TestClient {
 //        attributes.add(AttributeBuilder.build(Name.NAME, randName));
         attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_NODE_STATUS, "1"));
         attributes.add(AttributeBuilder.build("field_image", "4489"));
-        attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_NODE_BODY, nodeName+" body"));
+        attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_NODE_BODY, nodeName + " body"));
         attributes.add(AttributeBuilder.build("field_icon", "4489"));
 
         Uid nodeNid = conn.create(nodeDepartmentObjectClass, attributes, null);
@@ -339,8 +361,7 @@ public class TestClient {
     }
 
     @Test
-    public void testSearchNodeByName()
-    {
+    public void testSearchNodeByName() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -356,8 +377,7 @@ public class TestClient {
     }
 
     @Test
-    public void testSearchAllNodes()
-    {
+    public void testSearchAllNodes() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -376,12 +396,12 @@ public class TestClient {
 
         Uid uid = new Uid(nodeId);
         Set<Attribute> attributes = new HashSet<Attribute>();
-        String newName = nodeName+"V2";// + (new Random()).nextInt();
+        String newName = nodeName + "V2";// + (new Random()).nextInt();
         attributes.add(AttributeBuilder.build("title_field", newName));
 //        attributes.add(AttributeBuilder.build(Name.NAME, randName));
         attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_NODE_STATUS, "1"));
         attributes.add(AttributeBuilder.build("field_image", "4513"));
-        attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_NODE_BODY, newName+" body"));
+        attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_NODE_BODY, newName + " body"));
         attributes.add(AttributeBuilder.build("field_icon", "4515"));
 
         Uid userUid = conn.update(nodeDepartmentObjectClass, uid, attributes, null);
@@ -390,15 +410,14 @@ public class TestClient {
 
 
     @Test
-    public void testDeleteNode()
-    {
+    public void testDeleteNode() {
         Uid uid = new Uid(nodeId);
         conn.delete(nodeDepartmentObjectClass, uid, null);
     }
 
-    private static String termId = "345"; //test_node
+    private static String termId = "677"; //test_node
     private static String termName = "test_node";
-    private static final ObjectClass termCompanyStructureObjectClass = new ObjectClass(DrupalConnector.OC_TERM_Prefix+"company_structure");
+    private static final ObjectClass termCompanyStructureObjectClass = new ObjectClass(DrupalConnector.OC_TERM_Prefix + "company_structure");
 
     @Test
     public void testCreateTerm() {
@@ -433,8 +452,7 @@ public class TestClient {
     }
 
     @Test
-    public void testSearchTermByName()
-    {
+    public void testSearchTermByName() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -450,8 +468,7 @@ public class TestClient {
     }
 
     @Test
-    public void testSearchAllTerms()
-    {
+    public void testSearchAllTerms() {
         ResultsHandler rh = new ResultsHandler() {
             @Override
             public boolean handle(ConnectorObject connectorObject) {
@@ -470,7 +487,7 @@ public class TestClient {
 
         Uid uid = new Uid(termId);
         Set<Attribute> attributes = new HashSet<Attribute>();
-        String newName = termName+"V2";// + (new Random()).nextInt();
+        String newName = termName + "V2";// + (new Random()).nextInt();
         attributes.add(AttributeBuilder.build(Name.NAME, newName));
         attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_TAX_WEIGHT, "-1")); // first, default is "0"
         attributes.add(AttributeBuilder.build("field_structure_department", "0"));
@@ -481,12 +498,28 @@ public class TestClient {
         LOG.ok("Term {0} updated", userUid.getUidValue());
     }
 
+    @Test
+    public void testUpdateToRootParentTerm() {
+
+        Uid uid = new Uid(termId);
+        Set<Attribute> attributes = new HashSet<Attribute>();
+        String root = "0";
+        attributes.add(AttributeBuilder.build(DrupalConnector.ATTR_TAX_PARENT, root)); // Generic Teams
+
+
+        Uid userUid = conn.update(termCompanyStructureObjectClass, uid, attributes, null);
+        LOG.ok("Term {0} updated", userUid.getUidValue());
+    }
 
     @Test
-    public void testDeleteTerm()
-    {
+    public void testDeleteTerm() {
         Uid uid = new Uid(termId);
         conn.delete(termCompanyStructureObjectClass, uid, null);
+    }
+
+    @Test
+    public void testNodeCache() {
+        conn.nodeCache.getIdOrCreate("department", "IT Services");
     }
 
 
@@ -510,7 +543,7 @@ public class TestClient {
 //        LOG.ok("new FID: " + newFid);
 
 
-        HttpGet request = new HttpGet(conf.getServiceAddress()+conn.FILE+"/"+"4565");
+        HttpGet request = new HttpGet(conf.getServiceAddress() + conn.FILE + "/" + "4565");
         JSONObject jores = conn.callRequest(request, true);
         String fileContent = jores.getString("file");
         LOG.ok("new file content: " + fileContent);
@@ -518,6 +551,40 @@ public class TestClient {
 
         Path pathTo = Paths.get("C:\\Users\\Public\\Pictures\\Sample Pictures\\Koala2.jpg");
         Files.write(pathTo, data);
+    }
+
+    @Test
+    public void testEncode() throws UnsupportedEncodingException {
+        String encoded = URLEncoder.encode("value with spaces", "UTF-8");
+        System.out.println("encoded = " + encoded);
+    }
+
+
+    @Test
+    public void getNotExisting() throws IOException {
+        HttpGet requestFind = new HttpGet(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "-1");
+        JSONArray entities = conn.callRequest(requestFind);
+    }
+
+    @Test
+    public void delete4() throws IOException {
+//        HttpDelete request = new HttpDelete(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "/" + 317);
+//        conn.execute(request);//.close();
+//        HttpDelete request2 = new HttpDelete(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "/" + 196);
+//        conn.execute(request2);//.close();
+//        HttpDelete request3 = new HttpDelete(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "/" + 316);
+//        conn.execute(request3);//.close();
+//        HttpDelete request4 = new HttpDelete(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "/" + 308);
+//        conn.execute(request4);//.close();
+        HttpDelete request = new HttpDelete(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "/" + 317);
+        conn.callRequest(request, false);//.close();
+        HttpDelete request2 = new HttpDelete(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "/" + 196);
+        conn.callRequest(request2, false);//.close();
+        HttpDelete request3 = new HttpDelete(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "/" + 316);
+        conn.callRequest(request3, false);//.close();
+        HttpDelete request4 = new HttpDelete(conn.getConfiguration().getServiceAddress() + conn.TAXONOMY_TERM + "/" + 308);
+        conn.callRequest(request4, false);//.close();
+
     }
 
 //

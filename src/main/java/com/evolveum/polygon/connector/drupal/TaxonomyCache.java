@@ -5,12 +5,14 @@ import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.identityconnectors.common.StringUtil;
 import org.identityconnectors.common.logging.Log;
+import org.identityconnectors.framework.common.exceptions.ConnectorException;
 import org.identityconnectors.framework.common.exceptions.ConnectorIOException;
 import org.identityconnectors.framework.common.exceptions.InvalidAttributeValueException;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.net.URLEncoder;
 import java.util.*;
 
 /**
@@ -94,40 +96,58 @@ public class TaxonomyCache {
     }
 
     public String getName(String machineName, String id) {
+        LOG.ok("getName for machine name {0} and id {1}", machineName, id);
         if (!cacheById.get(machineName).containsKey(id)) {
             // read it and put to taxonomyCache
 
+            HttpGet request = new HttpGet(connector.getConfiguration().getServiceAddress() + connector.TAXONOMY_TERM + "/" + id);
+            JSONObject taxonomy = null;
             try {
-                HttpGet request = new HttpGet(connector.getConfiguration().getServiceAddress() + connector.TAXONOMY_TERM + "/" + id);
-                JSONObject taxonomy = connector.callRequest(request, true);
-                String value = taxonomy.getString(connector.ATTR_NAME);
-
-                String machineNameFromResource = taxonomy.getString(connector.ATTR_TAX_VOCABULARY_MACHINE_NAME);
-                if (!machineName.equals(machineNameFromResource)){
-                    throw new InvalidAttributeValueException("Expected "+machineName+", but get "+machineNameFromResource+" for TID:"+id);
+                taxonomy = connector.callRequest(request, true);
+            } catch (ConnectorException ce){
+                if (ce.getMessage().contains("HTTP error 500 Internal Server Error"))
+                {
+                    LOG.warn(ce, "probably already deleted TID, returning NULL as his value");
+                    return null;
                 }
-
-                cacheById.get(machineName).put(id, value);
-                cacheByName.get(machineName).put(value, id);
-
-            } catch (IOException e) {
-                throw new ConnectorIOException(e.getMessage(), e);
+                else {
+                    throw ce;
+                }
+            } catch (IOException ioe){
+                throw new ConnectorIOException(ioe.getMessage(), ioe);
             }
+
+
+            String value = taxonomy.getString(connector.ATTR_NAME);
+
+            String machineNameFromResource = taxonomy.getString(connector.ATTR_TAX_VOCABULARY_MACHINE_NAME);
+            if (!machineName.equals(machineNameFromResource)) {
+                if (connector.getConfiguration().getIgnoreTypeMismatch()) {
+                    LOG.warn("Expected \"+machineName+\", but get \"+machineNameFromResource+\" for TID:" + id + " (" + value + "), returning NULL");
+                    return null;
+                } else {
+                    throw new InvalidAttributeValueException("Expected " + machineName + ", but get " + machineNameFromResource + " for TID:" + id + " (" + value + ")");
+                }
+            }
+
+            cacheById.get(machineName).put(id, value);
+            cacheByName.get(machineName).put(value, id);
         }
 
         return cacheById.get(machineName).get(id);
     }
 
     public String getIdOrCreate(String machineName, String fieldValue) {
+        LOG.ok("getIdOrCreate for machine name {0} and value {1}", machineName, fieldValue);
         String id = cacheByName.get(machineName).get(fieldValue);
         if (StringUtil.isNotEmpty(id)) {
             return id; // exists & is OK
         }
-        else if (StringUtil.isEmpty(id) && connector.getConfiguration().isCreateTaxonomyWhenNameNotExists()) {
+        else {
             try {
                 // check if not created before
                 HttpGet requestFind = new HttpGet(connector.getConfiguration().getServiceAddress() + connector.TAXONOMY_TERM +
-                        "?parameters[" + connector.VID + "]=" + connector.getConfiguration().getTaxonomiesKeys().get(machineName) + "&parameters["+connector.ATTR_NAME+"]="+fieldValue);
+                        "?parameters[" + connector.VID + "]=" + connector.getConfiguration().getTaxonomiesKeys().get(machineName) + "&parameters["+connector.ATTR_NAME+"]="+ URLEncoder.encode(fieldValue, "UTF-8"));
                 JSONArray entities = connector.callRequest(requestFind);
                 if (entities.length()>1){
                     List<String> tids = new LinkedList<>();
@@ -149,6 +169,9 @@ public class TaxonomyCache {
                 }
                 LOG.ok("Existing value not found on resource for value: "+fieldValue+", machineName: "+machineName+", creating new...");
                 // else not found
+                if (!connector.getConfiguration().isCreateTaxonomyWhenNameNotExists(machineName)){
+                    throw new InvalidAttributeValueException("Value '"+fieldValue+"' in machine name '"+machineName+"' not existst and auto-create is disabled");
+                }
 
                 // creating new taxonomy
                 JSONObject jo = new JSONObject();
@@ -167,9 +190,6 @@ public class TaxonomyCache {
             } catch (IOException e) {
                 throw new ConnectorIOException(e.getMessage(), e);
             }
-
-        } else {
-            throw new InvalidAttributeValueException("Value '"+fieldValue+"' in machine name '"+machineName+"' not existst and auto-create is disabled");
         }
     }
 }

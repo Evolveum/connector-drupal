@@ -1,12 +1,12 @@
 /**
  * Copyright (c) 2016 Evolveum
- *
+ * <p/>
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p/>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p/>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,10 +24,7 @@ import org.identityconnectors.common.Base64;
 import org.identityconnectors.common.StringUtil;
 import org.identityconnectors.common.logging.Log;
 import org.identityconnectors.common.security.GuardedString;
-import org.identityconnectors.framework.common.exceptions.AlreadyExistsException;
-import org.identityconnectors.framework.common.exceptions.ConnectorIOException;
-import org.identityconnectors.framework.common.exceptions.InvalidAttributeValueException;
-import org.identityconnectors.framework.common.exceptions.UnknownUidException;
+import org.identityconnectors.framework.common.exceptions.*;
 import org.identityconnectors.framework.common.objects.*;
 import org.identityconnectors.framework.common.objects.filter.FilterTranslator;
 import org.identityconnectors.framework.spi.Configuration;
@@ -45,6 +42,7 @@ import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.URLEncoder;
 import java.util.*;
 
 /**
@@ -84,9 +82,9 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     private static final String UID = "uid"; // user ID
     protected static final String TID = "tid"; // taxonomy ID
     protected static final String VID = "vid"; // vocabulary ID
-    private static final String NID = "nid"; // node ID
+    protected static final String NID = "nid"; // node ID
     protected static final String FID = "fid"; // file ID
-    private static final String VALUE = "value"; // field value
+    protected static final String VALUE = "value"; // field value
     private static final String CONTENT_TYPE = "application/json";
     protected static final String TRANSFORMED_POSTFIX = "_transformed";
 
@@ -100,10 +98,11 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     public static final String ATTR_TAX_PARENT = "parent";
 
     // node
+    public static final String NODE_KEY = "KEY";
     public static final String OC_NODE_Prefix = "node_";
-    private static final String ATTR_NODE_TITLE = "title";
+    protected static final String ATTR_NODE_TITLE = "title";
     public static final String ATTR_NODE_STATUS = "status";
-    private static final String ATTR_NODE_TYPE = "type";
+    protected static final String ATTR_NODE_TYPE = "type";
     public static final String ATTR_NODE_BODY = "body";
     private static final String ATTR_NODE_CREATED = "created";
     private static final String ATTR_NODE_CHANGED = "changed";
@@ -114,34 +113,50 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     private static final String ATTR_FILE_STATUS_DEFAULT = "0";
     private static final String ATTR_FILE_FILE = "file";
 
-    TaxonomyCache taxonomyCache;
+    private TaxonomyCache taxonomyCache;
+
+    public NodeCache nodeCache;
 
     @Override
     public void test() {
-        HttpGet request = new HttpGet(getConfiguration().getServiceAddress()+USER+"/1");
-        try {
-            callRequest(request, true);
-        } catch (IOException e) {
-            throw new ConnectorIOException("Error when testing connection: "+e.getMessage(), e);
+        if (getConfiguration().getSkipTestConnection()){
+            LOG.ok("test is skipd");
+        } else {
+            LOG.ok("test - reading admin user");
+            try {
+                HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "/1");
+                callRequest(request, true);
+            } catch (IOException e) {
+                throw new ConnectorIOException("Error when testing connection: " + e.getMessage(), e);
+            }
         }
     }
 
     @Override
     public void init(Configuration configuration) {
         super.init(configuration);
-        LOG.ok("configuration: {0}", ((DrupalConfiguration)this.getConfiguration()).toString());
+        LOG.ok("configuration: {0}", ((DrupalConfiguration) this.getConfiguration()).toString());
 
         getConfiguration().parseMetadatas();
 
-        initializeTaxonomyCache();
+        try {
+            taxonomyCache = new TaxonomyCache(this);
+            nodeCache = new NodeCache(this);
+        } catch (IOException e) {
+            throw new ConnectorIOException("Error while initializing taxonomyCache: " + e.getMessage(), e);
+        }
     }
 
     @Override
-    public void dispose(){
+    public void dispose() {
         super.dispose();
         if (taxonomyCache != null) {
             taxonomyCache.clear();
             taxonomyCache = null;
+        }
+        if (nodeCache != null) {
+            nodeCache.clear();
+            nodeCache = null;
         }
     }
 
@@ -191,14 +206,12 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         // additional fields
         addFields(getConfiguration().getUserMetadatas().keySet(), getConfiguration().getRequiredFieldsList(), objClassBuilder);
 
-
         // file fields transformed
-        for (String fileField : getConfiguration().getUser2files()){
+        for (String fileField : getConfiguration().getUser2files()) {
             AttributeInfoBuilder attrFieldTransformBuilder = new AttributeInfoBuilder(fileField + TRANSFORMED_POSTFIX);
             attrFieldTransformBuilder.setReturnedByDefault(false);
             objClassBuilder.addAttributeInfo(attrFieldTransformBuilder.build());
         }
-
 
         schemaBuilder.defineObjectClass(objClassBuilder.build());
     }
@@ -207,7 +220,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
         for (String machineName : getConfiguration().getTaxonomiesMetadatas().keySet()) {
             ObjectClassInfoBuilder objClassBuilder = new ObjectClassInfoBuilder();
-            objClassBuilder.setType(OC_TERM_Prefix+machineName);
+            objClassBuilder.setType(OC_TERM_Prefix + machineName);
 
             // UID & NAME are defaults
 
@@ -218,7 +231,6 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             AttributeInfoBuilder attrWeightBuilder = new AttributeInfoBuilder(ATTR_TAX_WEIGHT);
             objClassBuilder.addAttributeInfo(attrWeightBuilder.build());
             AttributeInfoBuilder attrParentBuilder = new AttributeInfoBuilder(ATTR_TAX_PARENT);
-            attrParentBuilder.setMultiValued(true);
             objClassBuilder.addAttributeInfo(attrParentBuilder.build());
 
             // additional fields
@@ -254,7 +266,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     }
 
     private void addFields(Set<String> fields, List<String> requiredField, ObjectClassInfoBuilder objClassBuilder) {
-        if(fields != null){
+        if (fields != null) {
             for (String field : fields) {
                 AttributeInfoBuilder attrFieldBuilder = new AttributeInfoBuilder(field);
                 attrFieldBuilder.setReturnedByDefault(false);
@@ -263,9 +275,17 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                 }
                 objClassBuilder.addAttributeInfo(attrFieldBuilder.build());
 
-                // need to transform
+                // need to transform taxonomy
                 String machineName = getConfiguration().getUser2taxonomies().get(field);
                 if (machineName != null) {
+                    AttributeInfoBuilder attrFieldTransformBuilder = new AttributeInfoBuilder(field + TRANSFORMED_POSTFIX);
+                    attrFieldTransformBuilder.setReturnedByDefault(false);
+                    objClassBuilder.addAttributeInfo(attrFieldTransformBuilder.build());
+                }
+
+                // need to transform node
+                String type = getConfiguration().getUser2nodes().get(field);
+                if (type != null) {
                     AttributeInfoBuilder attrFieldTransformBuilder = new AttributeInfoBuilder(field + TRANSFORMED_POSTFIX);
                     attrFieldTransformBuilder.setReturnedByDefault(false);
                     objClassBuilder.addAttributeInfo(attrFieldTransformBuilder.build());
@@ -280,12 +300,12 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             return createOrUpdateUser(null, attributes);
         } else {
             for (String machineName : getConfiguration().getTaxonomiesMetadatas().keySet()) {
-                if (objectClass.is(OC_TERM_Prefix+machineName)){
+                if (objectClass.is(OC_TERM_Prefix + machineName)) {
                     return createOrUpdateTaxonomy(null, attributes, machineName);
                 }
             }
             for (String machineName : getConfiguration().getTaxonomiesMetadatas().keySet()) {
-                if (objectClass.is(OC_NODE_Prefix+machineName)){
+                if (objectClass.is(OC_NODE_Prefix + machineName)) {
                     return createOrUpdateNode(null, attributes, machineName);
                 }
             }
@@ -298,49 +318,60 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         // don't log request here - password field !!!
         LOG.ok("request URI: {0}", request.getURI());
         request.setHeader("Content-Type", CONTENT_TYPE);
-        HttpEntity entity = new ByteArrayEntity(jo.toString().getBytes());
+        HttpEntity entity = new ByteArrayEntity(jo.toString().getBytes("UTF-8"));
         request.setEntity(entity);
-        HttpResponse response = execute(request);
+        CloseableHttpResponse response = execute(request);
         LOG.ok("response: {0}", response);
         processDrupalResponseErrors(response);
 
         String result = EntityUtils.toString(response.getEntity());
         LOG.ok("response body: {0}", result);
+        closeResponse(response);
         return new JSONObject(result);
     }
 
     protected JSONObject callRequest(HttpRequestBase request, boolean parseResult) throws IOException {
         LOG.ok("request URI: {0}", request.getURI());
         request.setHeader("Content-Type", CONTENT_TYPE);
-        HttpResponse response = execute(request);
+        CloseableHttpResponse response = null;
+        response = execute(request);
         LOG.ok("response: {0}", response);
         processDrupalResponseErrors(response);
 
         if (!parseResult) {
+            closeResponse(response);
             return null;
         }
         String result = EntityUtils.toString(response.getEntity());
         LOG.ok("response body: {0}", result);
+        closeResponse(response);
         return new JSONObject(result);
     }
 
     protected JSONArray callRequest(HttpRequestBase request) throws IOException {
         LOG.ok("request URI: {0}", request.getURI());
         request.setHeader("Content-Type", CONTENT_TYPE);
-        HttpResponse response = execute(request);
+        CloseableHttpResponse response = execute(request);
         LOG.ok("response: {0}", response);
         processDrupalResponseErrors(response);
 
         String result = EntityUtils.toString(response.getEntity());
         LOG.ok("response body: {0}", result);
+        closeResponse(response);
         return new JSONArray(result);
     }
 
-    private void processDrupalResponseErrors(HttpResponse response) throws IOException {
+    private void processDrupalResponseErrors(CloseableHttpResponse response){
         int statusCode = response.getStatusLine().getStatusCode();
         if (statusCode == 406) {
-            String result = EntityUtils.toString(response.getEntity());
-            if (result.contains("There is no user with ID")) {
+            String result = null;
+            try {
+                result = EntityUtils.toString(response.getEntity());
+            } catch (IOException e) {
+                throw new ConnectorIOException("Error when trying to get response entity: "+response, e);
+            }
+            if (result.contains("There is no user with ID") || result.contains("There is no term with ID") || result.contains("There is no ")) {
+                closeResponse(response);
                 throw new UnknownUidException(result);
             }
             JSONObject err;
@@ -348,16 +379,19 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                 LOG.ok("Result body: {0}", result);
                 JSONObject jo = new JSONObject(result);
                 err = jo.getJSONObject("form_errors");
-            }
-            catch (JSONException e){
-                throw new ConnectorIOException(e.getMessage()+" when parsing result: "+result, e);
+            } catch (JSONException e) {
+                closeResponse(response);
+                throw new ConnectorIOException(e.getMessage() + " when parsing result: " + result, e);
             }
             if (err.has(ATTR_NAME)) {
+                closeResponse(response);
                 throw new AlreadyExistsException(err.getString(ATTR_NAME)); // The name test_evolveum is already taken.
             } else if (err.has(ATTR_MAIL)) {
+                closeResponse(response);
                 throw new AlreadyExistsException(err.getString(ATTR_MAIL)); // The e-mail address test@evolveum.com is already taken.
             } else {
-                throw new ConnectorIOException("Error when creating user: " + result);
+                closeResponse(response);
+                throw new ConnectorIOException("Error when process response: " + result);
             }
         }
         super.processResponseErrors(response);
@@ -416,7 +450,11 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         putRolesIfExists(attributes, jo);
 
         for (Map.Entry<String, String> entry : getConfiguration().getUserMetadatas().entrySet()) {
-            putUndFieldIfExists(attributes, entry.getKey(), jo, entry.getValue(), false); //consistent state
+            boolean singleValueField = false;
+            if (getConfiguration().getSingleValueUserFields().contains(entry.getKey())) {
+                singleValueField = true;
+            }
+            putUndFieldIfExists(attributes, entry.getKey(), jo, entry.getValue(), singleValueField, create);
         }
 
         LOG.ok("user request (without password): {0}", jo.toString());
@@ -431,15 +469,14 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             HttpEntityEnclosingRequestBase request;
             if (create) {
                 request = new HttpPost(getConfiguration().getServiceAddress() + USER);
-            }
-            else {
+            } else {
                 // update
-                request = new HttpPut(getConfiguration().getServiceAddress()+USER+"/"+uid.getUidValue());
+                request = new HttpPut(getConfiguration().getServiceAddress() + USER + "/" + uid.getUidValue());
             }
             JSONObject jores = callRequest(request, jo);
 
             String newUid = jores.getString(UID);
-            LOG.info("response UID: {0}", uid);
+            LOG.info("response UID: {0}", newUid);
             return new Uid(newUid);
         } catch (IOException e) {
             throw new ConnectorIOException(e.getMessage(), e);
@@ -448,8 +485,8 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
     private void handleFiles(Set<Attribute> attributes, JSONObject jo, Uid uid, String userName) throws IOException {
         for (String fileFieldName : getConfiguration().getUser2files()) {
-            byte[] fileContent = getAttr(attributes, fileFieldName+TRANSFORMED_POSTFIX, byte[].class);
-            if (fileContent!=null && fileContent.length>0){
+            byte[] fileContent = getAttr(attributes, fileFieldName + TRANSFORMED_POSTFIX, byte[].class);
+            if (fileContent != null && fileContent.length > 0) {
                 String newFid = null; // don't need update
                 // update user
                 if (uid != null) {
@@ -475,8 +512,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                             newFid = createFile(fileContent, userName);
                         }
                         // else we have already the same file content in resource, update is ignored
-                    }
-                    else {
+                    } else {
                         // existing user don't has file now
                         newFid = createFile(fileContent, userName);
 
@@ -514,14 +550,14 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                 ImageReader reader = (ImageReader) imageReaders.next();
                 extension = reader.getFormatName();
             }
-        } catch (IOException e){
+        } catch (IOException e) {
             throw new ConnectorIOException("not parseable image extension (JPEG/PNG/...): " + e.getMessage(), e);
         }
 
         JSONObject jo = new JSONObject();
         jo.put(ATTR_FILE_STATUS, ATTR_FILE_STATUS_DEFAULT);
         jo.put(ATTR_FILE_FILE, Base64.encode(fileContent));
-        jo.put(ATTR_FILE_FILENAME, fileName+"."+extension);
+        jo.put(ATTR_FILE_FILENAME, fileName + "." + extension);
 
 
         HttpPost request = new HttpPost(getConfiguration().getServiceAddress() + FILE);
@@ -549,7 +585,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     private void handleEnable(Set<Attribute> attributes, JSONObject jo) {
         Boolean enable = getAttr(attributes, OperationalAttributes.ENABLE_NAME, Boolean.class);
 
-        if (enable!=null){
+        if (enable != null) {
             jo.put(ATTR_STATUS, enable ? STATUS_ENABLED : STATUS_BLOCKED);
         }
     }
@@ -557,18 +593,15 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     private void putRolesIfExists(Set<Attribute> attributes, JSONObject jo) {
         String[] roles = getMultiValAttr(attributes, ATTR_ROLES, null);
 
-        if (roles!=null) {
+        if (roles != null) {
             // "roles":{"2":"2", "3":"3" }
             JSONObject joRoles = new JSONObject();
-            for (String role : roles){
+            for (String role : roles) {
                 joRoles.put(role, role);
             }
-            joRoles.put("1", "1"); // role name is not important
-            joRoles.put("2", "2");
             jo.put(ATTR_ROLES, joRoles);
         }
     }
-
 
     private Uid createOrUpdateTaxonomy(Uid uid, Set<Attribute> attributes, String machineName) {
         LOG.ok("createOrUpdateTaxonomy, Uid: {0}, machine_name: {1} attributes: {2}", uid, machineName, attributes);
@@ -583,23 +616,36 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         if (create && StringUtil.isBlank(name)) {
             throw new InvalidAttributeValueException("Missing mandatory attribute " + Name.NAME);
         }
+        if (create) {
+            // check existence with the same name
+            try {
+                HttpGet requestFind = new HttpGet(getConfiguration().getServiceAddress() + TAXONOMY_TERM +
+                        "?parameters[" + VID + "]=" + getConfiguration().getTaxonomiesKeys().get(machineName) + "&parameters[" + ATTR_NAME + "]=" + URLEncoder.encode(name, "UTF-8"));
+                JSONArray entities = callRequest(requestFind);
+                if (entities.length() > 0) {
+                    throw new AlreadyExistsException("term with name '" + name + "' and machine name '" + machineName + "' already exists: " + entities);
+                }
+            } catch (IOException e) {
+                throw new ConnectorIOException(e.getMessage(), e);
+            }
+        }
 
         String weight = getStringAttr(attributes, ATTR_TAX_WEIGHT);
         if (create && StringUtil.isBlank(weight)) {
-            throw new InvalidAttributeValueException("Missing mandatory attribute " + weight+" please use at least default = '0'");
+            throw new InvalidAttributeValueException("Missing mandatory attribute " + ATTR_TAX_WEIGHT + " please use at least default = '0'");
         }
-        if (name != null){
+        if (name != null) {
             jo.put(ATTR_NAME, name);
         }
-        if (weight != null){
+        if (weight != null) {
             jo.put(ATTR_TAX_WEIGHT, weight);
         }
-        putFieldIfExists(attributes, ATTR_TAX_DESCRIPTION, jo);
+        putFieldValueIfExists(attributes, ATTR_TAX_DESCRIPTION, jo); // "description": {"value": "created by midPoint"},
         putFieldIfExists(attributes, ATTR_TAX_FORMAT, jo);
         putArrayIfExists(attributes, ATTR_TAX_PARENT, jo);
 
         for (Map.Entry<String, String> entry : getConfiguration().getTaxonomiesMetadatas().get(machineName).entrySet()) {
-            putUndFieldIfExists(attributes, entry.getKey(), jo, entry.getValue(), create);
+            putUndFieldIfExists(attributes, entry.getKey(), jo, entry.getValue(), false, create);
         }
 
         LOG.ok("request body: {0}", jo.toString());
@@ -609,9 +655,9 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             if (create) {
                 jo.put(ATTR_TAX_VOCABULARY_MACHINE_NAME, machineName);
                 request = new HttpPost(getConfiguration().getServiceAddress() + TAXONOMY_TERM);
-            }else {
+            } else {
                 // update
-                request = new HttpPut(getConfiguration().getServiceAddress()+TAXONOMY_TERM+"/"+uid.getUidValue());
+                request = new HttpPut(getConfiguration().getServiceAddress() + TAXONOMY_TERM + "/" + uid.getUidValue());
             }
             JSONObject jores = callRequest(request, jo);
             String tid = jores.getString(TID);
@@ -633,17 +679,17 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         boolean create = uid == null;
         JSONObject jo = new JSONObject();
         String name = getStringAttr(attributes, Name.NAME);
-        if (name!=null) {
+        if (name != null) {
             jo.put(ATTR_NODE_TITLE, name);
         }
 
         putFieldIfExists(attributes, ATTR_NODE_STATUS, jo);
-        putUndFieldIfExists(attributes, ATTR_NODE_BODY, jo, VALUE, create);
+        putUndFieldIfExists(attributes, ATTR_NODE_BODY, jo, VALUE, false, create);
         putFieldIfExists(attributes, ATTR_NODE_CREATED, jo);
         putFieldIfExists(attributes, ATTR_NODE_CHANGED, jo);
 
         for (Map.Entry<String, String> entry : getConfiguration().getNodesMetadatas().get(type).entrySet()) {
-            putUndFieldIfExists(attributes, entry.getKey(), jo, entry.getValue(), create);
+            putUndFieldIfExists(attributes, entry.getKey(), jo, entry.getValue(), false, create);
         }
 
         LOG.ok("request body: {0}", jo.toString());
@@ -652,10 +698,10 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             HttpEntityEnclosingRequestBase request;
             if (create) {
                 jo.put(ATTR_NODE_TYPE, type);
-                request = new HttpPost(getConfiguration().getServiceAddress()+NODE);
+                request = new HttpPost(getConfiguration().getServiceAddress() + NODE);
             } else {
                 //update
-                request = new HttpPut(getConfiguration().getServiceAddress()+NODE+"/"+uid.getUidValue());
+                request = new HttpPut(getConfiguration().getServiceAddress() + NODE + "/" + uid.getUidValue());
             }
             JSONObject jores = callRequest(request, jo);
             String nid = jores.getString(NID);
@@ -670,12 +716,21 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         String fieldValue = getStringAttr(attributes, fieldName);
         if (fieldValue != null) {
             jo.put(fieldName, fieldValue);
+        } else if (getConfiguration().getRequiredFieldsList().contains(fieldName)) {
+            throw new InvalidAttributeValueException("Missing mandatory attribute " + fieldName);
         }
-        else if (getConfiguration().getRequiredFieldsList().contains(fieldName)) {
-            throw new InvalidAttributeValueException("Missing mandatory attribute "+fieldName);
-        }
-
     }
+
+    private void putFieldValueIfExists(Set<Attribute> attributes, String fieldName, JSONObject jo) {
+        String value = getStringAttr(attributes, fieldName);
+        if (value != null) {
+//            "description": {"value": "created by midPoint"}
+            JSONObject joValue = new JSONObject();
+            joValue.put(VALUE, value);
+            jo.put(fieldName, joValue);
+        }
+    }
+
 
     private void putArrayIfExists(Set<Attribute> attributes, String attributeName, JSONObject jo) {
         String parent = getStringAttr(attributes, attributeName);
@@ -687,24 +742,35 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
     }
 
-    private void putUndFieldIfExists(Set<Attribute> attributes, String fieldName, JSONObject jo, String subFieldName, boolean create) {
+    private void putUndFieldIfExists(Set<Attribute> attributes, String fieldName, JSONObject jo, String subFieldName, boolean singleValueField, boolean create) {
         String fieldValue = getStringAttr(attributes, fieldName);
         String tranformedFieldValue = null;
         if (fieldValue == null && getConfiguration().getUser2taxonomies().containsKey(fieldName)) {
             // try to get value from transformed attribute
-            tranformedFieldValue = getStringAttr(attributes, fieldName+TRANSFORMED_POSTFIX);
-            if (tranformedFieldValue!=null) {
+            tranformedFieldValue = getStringAttr(attributes, fieldName + TRANSFORMED_POSTFIX);
+            if (tranformedFieldValue != null) {
+                fieldValue = tranformedFieldValue;
+            }
+        } else if (fieldValue == null && getConfiguration().getUser2nodes().containsKey(fieldName)) {
+            // try to get value from transformed attribute
+            tranformedFieldValue = getStringAttr(attributes, fieldName + TRANSFORMED_POSTFIX);
+            if (tranformedFieldValue != null) {
                 fieldValue = tranformedFieldValue;
             }
         }
         if (fieldValue != null) {
             // transformed field value, need also to convert his value to ID
             if (tranformedFieldValue != null) {
+                // taxonomy
                 String machineName = getConfiguration().getUser2taxonomies().get(fieldName);
-                if (machineName != null){
+                if (machineName != null) {
                     fieldValue = taxonomyCache.getIdOrCreate(machineName, fieldValue);
                 }
-                //TODO support for node transformation
+                // node
+                String type = getConfiguration().getUser2nodes().get(fieldName);
+                if (type != null) {
+                    fieldValue = nodeCache.getIdOrCreate(type, fieldValue);
+                }
             }
 
             JSONArray undArray = new JSONArray();
@@ -712,7 +778,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             // "field_pub_department":{"und":[ { "tid":"298" } ]
             // when updating whis way (array):
             // "field_pub_department":{"und":[ "298" ]
-            if (!create && (NID.equals(subFieldName) || TID.equals(subFieldName) /*|| FID.equals(subFieldName)*/ || UID.equals(subFieldName))) {
+            if (create && singleValueField || !create && (NID.equals(subFieldName) || (TID.equals(subFieldName) && singleValueField) /*|| FID.equals(subFieldName)*/ || UID.equals(subFieldName))) {
                 subFieldName = null;
             }
             if (subFieldName != null) {
@@ -720,17 +786,15 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                 JSONObject value = new JSONObject();
                 value.put(subFieldName, fieldValue);
                 undArray.put(value);
-            }
-            else {
+            } else {
                 // ""field_department":{"und":["1314"]
                 undArray.put(fieldValue);
             }
             JSONObject und = new JSONObject();
             und.put(UND, undArray);
             jo.put(fieldName, und);
-        }
-        else if (getConfiguration().getRequiredFieldsList().contains(fieldName)) {
-            throw new InvalidAttributeValueException("Missing mandatory attribute "+fieldName);
+        } else if (create && getConfiguration().getRequiredFieldsList().contains(fieldName)) {
+            throw new InvalidAttributeValueException("Missing mandatory attribute " + fieldName);
         }
     }
 
@@ -744,22 +808,21 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     public void delete(ObjectClass objectClass, Uid uid, OperationOptions operationOptions) {
         try {
             if (objectClass.is(ObjectClass.ACCOUNT_NAME)) {
-                    if (getConfiguration().getUserDeleteDisabled()){
-                        LOG.ok("disable user instead of delete, Uid: {0}", uid);
-                        JSONObject jo = new JSONObject();
-                        jo.put(ATTR_STATUS, STATUS_BLOCKED);
+                if (getConfiguration().getUserDeleteDisabled()) {
+                    LOG.ok("disable user instead of delete, Uid: {0}", uid);
+                    JSONObject jo = new JSONObject();
+                    jo.put(ATTR_STATUS, STATUS_BLOCKED);
 
-                        HttpPut request = new HttpPut(getConfiguration().getServiceAddress()+USER+"/"+uid.getUidValue());
-                        callRequest(request, jo);
-                    }
-                    else {
-                        LOG.ok("delete user, Uid: {0}", uid);
-                        HttpDelete request = new HttpDelete(getConfiguration().getServiceAddress() + USER + "/" + uid.getUidValue());
-                        callRequest(request, false);
-                    }
+                    HttpPut request = new HttpPut(getConfiguration().getServiceAddress() + USER + "/" + uid.getUidValue());
+                    callRequest(request, jo);
+                } else {
+                    LOG.ok("delete user, Uid: {0}", uid);
+                    HttpDelete request = new HttpDelete(getConfiguration().getServiceAddress() + USER + "/" + uid.getUidValue());
+                    callRequest(request, false);
+                }
             } else {
                 for (String machineName : getConfiguration().getTaxonomiesMetadatas().keySet()) {
-                    if (objectClass.is(OC_TERM_Prefix+machineName)){
+                    if (objectClass.is(OC_TERM_Prefix + machineName)) {
                         LOG.ok("delete taxonomy {0}, Uid: {1}", machineName, uid);
                         HttpDelete request = new HttpDelete(getConfiguration().getServiceAddress() + TAXONOMY_TERM + "/" + uid.getUidValue());
                         callRequest(request, false);
@@ -767,7 +830,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                     }
                 }
                 for (String type : getConfiguration().getNodesMetadatas().keySet()) {
-                    if (objectClass.is(OC_NODE_Prefix+type)){
+                    if (objectClass.is(OC_NODE_Prefix + type)) {
                         LOG.ok("delete node {0}, Uid: {1}", type, uid);
                         HttpDelete request = new HttpDelete(getConfiguration().getServiceAddress() + NODE + "/" + uid.getUidValue());
                         callRequest(request, false);
@@ -788,12 +851,12 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             return createOrUpdateUser(uid, attributes);
         } else {
             for (String machineName : getConfiguration().getTaxonomiesMetadatas().keySet()) {
-                if (objectClass.is(OC_TERM_Prefix+machineName)){
+                if (objectClass.is(OC_TERM_Prefix + machineName)) {
                     return createOrUpdateTaxonomy(uid, attributes, machineName);
                 }
             }
             for (String type : getConfiguration().getNodesMetadatas().keySet()) {
-                if (objectClass.is(OC_NODE_Prefix+type)){
+                if (objectClass.is(OC_NODE_Prefix + type)) {
                     return createOrUpdateNode(uid, attributes, type);
                 }
             }
@@ -814,18 +877,18 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             if (objectClass.is(ObjectClass.ACCOUNT_NAME)) {
                 //find by Uid (user Primary Key)
                 if (query != null && query.byUid != null) {
-                    HttpGet request = new HttpGet(getConfiguration().getServiceAddress()+USER+"/"+query.byUid);
+                    HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "/" + query.byUid);
                     JSONObject user = callRequest(request, true);
                     ConnectorObject connectorObject = convertUserToConnectorObject(user);
                     handler.handle(connectorObject);
                 }// find by name
                 else if (query != null && query.byName != null) {
-                    HttpGet request = new HttpGet(getConfiguration().getServiceAddress()+USER+"?parameters["+ATTR_NAME+"]="+query.byName);
+                    HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "?parameters[" + ATTR_NAME + "]=" + URLEncoder.encode(query.byName, "UTF-8"));
                     handleUsers(request, handler, options);
 
-                 //find by emailAddress
+                    //find by emailAddress
                 } else if (query != null && query.byEmailAddress != null) {
-                    HttpGet request = new HttpGet(getConfiguration().getServiceAddress()+USER+"?parameters["+ATTR_MAIL+"]="+query.byEmailAddress);
+                    HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "?parameters[" + ATTR_MAIL + "]=" + query.byEmailAddress);
                     handleUsers(request, handler, options);
 
                 } else {
@@ -843,8 +906,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                             pageing = processPaging(page, pageSize);
                             HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "?" + pageing);
                             boolean finish = handleUsers(request, handler, options);
-                            if (finish)
-                            {
+                            if (finish) {
                                 break;
                             }
                             page++;
@@ -854,21 +916,36 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
             } else {
                 for (String machineName : getConfiguration().getTaxonomiesMetadatas().keySet()) {
-                    if (objectClass.is(OC_TERM_Prefix+machineName)) {
+                    if (objectClass.is(OC_TERM_Prefix + machineName)) {
                         //find by Tid (taxonomy Primary Key)
                         if (query != null && query.byUid != null) {
                             HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + TAXONOMY_TERM + "/" + query.byUid);
-                            JSONObject taxonomy = callRequest(request, true);
+                            JSONObject taxonomy = null;
+                            try {
+                                taxonomy = callRequest(request, true);
+                            } catch (ConnectorException ce){
+                                if (getConfiguration().getHandle500asUnknownUidException() && ce.getMessage().contains("HTTP error 500 Internal Server Error"))
+                                {
+                                    LOG.warn(ce, "probably already deleted TID, returning UnknownUidException..." + ce);
+                                    throw new UnknownUidException("Request to find taxonomy term with ID: "+query.byUid+", but got 500 and changing to UnknownUidException is enabled (workaround for bug in Drupal)");
+                                }
+                                else {
+                                    throw ce;
+                                }
+                            } catch (IOException ioe){
+                                throw new ConnectorIOException(ioe.getMessage(), ioe);
+                            }
+
                             String machineNameFromResource = taxonomy.getString(ATTR_TAX_VOCABULARY_MACHINE_NAME);
-                            if (!machineName.equals(machineNameFromResource)){
-                                throw new InvalidAttributeValueException("Expected "+machineName+", but get "+machineNameFromResource+" for TID:"+query.byUid);
+                            if (!machineName.equals(machineNameFromResource)) {
+                                throw new InvalidAttributeValueException("Expected " + machineName + ", but get " + machineNameFromResource + " for TID:" + query.byUid);
                             }
                             ConnectorObject connectorObject = convertTaxonomyToConnectorObject(taxonomy, machineName);
                             handler.handle(connectorObject);
                         }// find by name
                         else if (query != null && query.byName != null) {
                             HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + TAXONOMY_TERM +
-                                    "?parameters[" + VID + "]=" + getConfiguration().getTaxonomiesKeys().get(machineName) + "&parameters["+ATTR_NAME+"]="+query.byName);
+                                    "?parameters[" + VID + "]=" + getConfiguration().getTaxonomiesKeys().get(machineName) + "&parameters[" + ATTR_NAME + "]=" + URLEncoder.encode(query.byName, "UTF-8"));
                             handleTaxonomies(request, machineName, handler, options);
                         } else {
                             // find required page
@@ -885,8 +962,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                                     pageing = processPaging(page, pageSize);
                                     HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + TAXONOMY_TERM + "?parameters[" + VID + "]=" + getConfiguration().getTaxonomiesKeys().get(machineName) + pageing);
                                     boolean finish = handleTaxonomies(request, machineName, handler, options);
-                                    if (finish)
-                                    {
+                                    if (finish) {
                                         break;
                                     }
                                     page++;
@@ -898,21 +974,21 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                     }
                 }
                 for (String type : getConfiguration().getNodesMetadatas().keySet()) {
-                    if (objectClass.is(OC_NODE_Prefix+type)) {
+                    if (objectClass.is(OC_NODE_Prefix + type)) {
                         //find by Nid (node Primary Key)
                         if (query != null && query.byUid != null) {
                             HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + NODE + "/" + query.byUid);
                             JSONObject node = callRequest(request, true);
                             String typeFromResource = node.getString(ATTR_NODE_TYPE);
-                            if (!type.equals(typeFromResource)){
-                                throw new InvalidAttributeValueException("Expected "+type+", but get "+typeFromResource+" for NID:"+query.byUid);
+                            if (!type.equals(typeFromResource)) {
+                                throw new InvalidAttributeValueException("Expected " + type + ", but get " + typeFromResource + " for NID:" + query.byUid);
                             }
                             ConnectorObject connectorObject = convertNodeToConnectorObject(node, type);
                             handler.handle(connectorObject);
                         }// find by name
                         else if (query != null && query.byName != null) {
                             HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + NODE +
-                                    "?parameters[" + ATTR_NODE_TYPE + "]=" + type + "&parameters["+ATTR_NODE_TITLE+"]="+query.byName);
+                                    "?parameters[" + ATTR_NODE_TYPE + "]=" + type + "&parameters[" + ATTR_NODE_TITLE + "]=" + URLEncoder.encode(query.byName, "UTF-8"));
                             handleNodes(request, type, handler, options);
                             // find all
                         } else {
@@ -930,8 +1006,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                                     pageing = processPaging(page, pageSize);
                                     HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + NODE + "?parameters[" + ATTR_NODE_TYPE + "]=" + type + pageing);
                                     boolean finish = handleNodes(request, type, handler, options);
-                                    if (finish)
-                                    {
+                                    if (finish) {
                                         break;
                                     }
                                     page++;
@@ -952,15 +1027,15 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
     private boolean handleUsers(HttpGet request, ResultsHandler handler, OperationOptions options) throws IOException {
         JSONArray users = callRequest(request);
-        LOG.ok("Number of users: {0}, pageResultsOffset: {1}, pageSize: {2} ", users.length(), options==null ? "null" : options.getPagedResultsOffset(), options==null ? "null" : options.getPageSize());
+        LOG.ok("Number of users: {0}, pageResultsOffset: {1}, pageSize: {2} ", users.length(), options == null ? "null" : options.getPagedResultsOffset(), options == null ? "null" : options.getPageSize());
 
-        for (int i = 0; i< users.length(); i++) {
+        for (int i = 0; i < users.length(); i++) {
             if (i % 10 == 0) {
                 LOG.ok("executeQuery: processing {0}. of {1} users", i, users.length());
             }
             // only basic fields
             JSONObject user = users.getJSONObject(i);
-            if (getConfiguration().getUserMetadatas().size()>1) {
+            if (getConfiguration().getUserMetadatas().size() > 1) {
                 // when using extended fields we need to get it each by one
                 HttpGet requestUserDetail = new HttpGet(getConfiguration().getServiceAddress() + USER + "/" + user.getString(UID));
                 user = callRequest(requestUserDetail, true);
@@ -974,7 +1049,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         }
 
         // last page exceed
-        if (getConfiguration().getPageSize()>users.length()) {
+        if (getConfiguration().getPageSize() > users.length()) {
             return true;
         }
         // need next page
@@ -998,7 +1073,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         getIfExists(user, ATTR_LANGUAGE, builder);
 
         if (user.has(ATTR_STATUS)) {
-            boolean enable = STATUS_ENABLED == user.getString(ATTR_STATUS) ? true : false;
+            boolean enable = STATUS_ENABLED.equals(user.getString(ATTR_STATUS)) ? true : false;
             addAttr(builder, OperationalAttributes.ENABLE_NAME, enable);
         }
 
@@ -1014,7 +1089,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
         // read files (avatar) if is needed & exists
         Map<String, byte[]> files = new HashMap<>();
-        for (String fileField : getConfiguration().getUser2files()){
+        for (String fileField : getConfiguration().getUser2files()) {
             String fid = getFidValue(user, fileField);
             if (fid != null) {
                 HttpGet requestUserDetail = new HttpGet(getConfiguration().getServiceAddress() + FILE + "/" + fid);
@@ -1032,9 +1107,9 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
     private boolean handleTaxonomies(HttpGet request, String machineName, ResultsHandler handler, OperationOptions options) throws IOException {
         JSONArray taxonomies = callRequest(request);
-        LOG.ok("Number of taxonomies: {0}, pageResultsOffset: {1}, pageSize: {2} ", taxonomies.length(), options==null ? "null" : options.getPagedResultsOffset(), options==null ? "null" : options.getPageSize());
+        LOG.ok("Number of taxonomies: {0}, pageResultsOffset: {1}, pageSize: {2} ", taxonomies.length(), options == null ? "null" : options.getPagedResultsOffset(), options == null ? "null" : options.getPageSize());
 
-        for (int i = 0; i< taxonomies.length(); i++) {
+        for (int i = 0; i < taxonomies.length(); i++) {
             if (i % 10 == 0) {
                 LOG.ok("executeQuery: processing {0}. of {1} users", i, taxonomies.length());
             }
@@ -1042,10 +1117,10 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             JSONObject taxonomy = taxonomies.getJSONObject(i);
             String machineVidFromResource = taxonomy.getString(VID);
             if (!getConfiguration().getTaxonomiesKeys().get(machineName).equals(machineVidFromResource)) {
-                throw new InvalidAttributeValueException("Expected taxonomy machine name" + machineName + " ("+getConfiguration().getTaxonomiesKeys().get(machineName)+")" + ", but get " + machineVidFromResource);
+                throw new InvalidAttributeValueException("Expected taxonomy machine name" + machineName + " (" + getConfiguration().getTaxonomiesKeys().get(machineName) + ")" + ", but get " + machineVidFromResource);
             }
 
-            if (getConfiguration().getTaxonomiesMetadatas().get(machineName).size()>0) {
+            if (getConfiguration().getTaxonomiesMetadatas().get(machineName).size() > 0) {
                 // with advanced fields we need to get it each one
                 HttpGet requestDetail = new HttpGet(getConfiguration().getServiceAddress() + TAXONOMY_TERM + "/" + taxonomy.getString(TID));
                 taxonomy = callRequest(requestDetail, true);
@@ -1059,7 +1134,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         }
 
         // last page exceed
-        if (getConfiguration().getPageSize()>taxonomies.length()) {
+        if (getConfiguration().getPageSize() > taxonomies.length()) {
             return true;
         }
         // need next page
@@ -1068,7 +1143,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
     private ConnectorObject convertTaxonomyToConnectorObject(JSONObject taxonomy, String machineName) {
         ConnectorObjectBuilder builder = new ConnectorObjectBuilder();
-        ObjectClass objectClass = new ObjectClass(OC_TERM_Prefix+machineName);
+        ObjectClass objectClass = new ObjectClass(OC_TERM_Prefix + machineName);
         builder.setObjectClass(objectClass);
         builder.setUid(new Uid(taxonomy.getString(TID)));
         if (taxonomy.has(ATTR_NAME)) {
@@ -1085,18 +1160,18 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         }
 
         ConnectorObject connectorObject = builder.build();
-        LOG.ok("convertTaxonomyToConnectorObject, user: {0}, \n\tconnectorObject: {1}",
+        LOG.ok("convertTaxonomyToConnectorObject, taxonomy term: {0}, \n\tconnectorObject: {1}",
                 taxonomy.getString(TID), connectorObject);
         return connectorObject;
     }
 
     private boolean handleNodes(HttpGet request, String type, ResultsHandler handler, OperationOptions options) throws IOException {
         JSONArray nodes = callRequest(request);
-        LOG.ok("Number of nodes: {0}, pageResultsOffset: {1}, pageSize: {2} ", nodes.length(), options==null ? "null" : options.getPagedResultsOffset(), options==null ? "null" : options.getPageSize());
+        LOG.ok("Number of nodes: {0}, pageResultsOffset: {1}, pageSize: {2} ", nodes.length(), options == null ? "null" : options.getPagedResultsOffset(), options == null ? "null" : options.getPageSize());
 
-        for (int i = 0; i< nodes.length(); i++) {
+        for (int i = 0; i < nodes.length(); i++) {
             if (i % 10 == 0) {
-                LOG.ok("executeQuery: processing {0}. of {1} users", i, nodes.length());
+                LOG.ok("executeQuery: processing {0}. of {1} nodes", i, nodes.length());
             }
             JSONObject node = nodes.getJSONObject(i);
             String typeFromResource = node.getString(ATTR_NODE_TYPE);
@@ -1104,9 +1179,9 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                 throw new InvalidAttributeValueException("Expected node type " + type + ", but get " + typeFromResource);
             }
 
-            if (getConfiguration().getNodesMetadatas().get(type).size()>0) {
+            if (getConfiguration().getNodesMetadatas().get(type).size() > 0) {
                 // with advanced fields we need to get it each one
-                HttpGet requestDetail = new HttpGet(getConfiguration().getServiceAddress() + TAXONOMY_TERM + "/" + node.getString(NID));
+                HttpGet requestDetail = new HttpGet(getConfiguration().getServiceAddress() + NODE + "/" + node.getString(NID));
                 node = callRequest(requestDetail, true);
             }
 
@@ -1118,7 +1193,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         }
 
         // last page exceed
-        if (getConfiguration().getPageSize()>nodes.length()) {
+        if (getConfiguration().getPageSize() > nodes.length()) {
             return true;
         }
         // need next page
@@ -1127,7 +1202,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
     private ConnectorObject convertNodeToConnectorObject(JSONObject node, String type) {
         ConnectorObjectBuilder builder = new ConnectorObjectBuilder();
-        ObjectClass objectClass = new ObjectClass(OC_NODE_Prefix+type);
+        ObjectClass objectClass = new ObjectClass(OC_NODE_Prefix + type);
         builder.setObjectClass(objectClass);
         builder.setUid(new Uid(node.getString(NID)));
         builder.setName(node.has(ATTR_NODE_TITLE) ? node.getString(ATTR_NODE_TITLE) : ""); // must contains
@@ -1142,13 +1217,13 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         }
 
         ConnectorObject connectorObject = builder.build();
-        LOG.ok("convertNodeToConnectorObject, user: {0}, \n\tconnectorObject: {1}",
+        LOG.ok("convertNodeToConnectorObject, node: {0}, \n\tconnectorObject: {1}",
                 node.getString(NID), connectorObject);
         return connectorObject;
     }
 
     private String processPageOptions(OperationOptions options) {
-        if (options!=null) {
+        if (options != null) {
             Integer pageSize = options.getPageSize();
             Integer pagedResultsOffset = options.getPagedResultsOffset();
             if (pageSize != null && pagedResultsOffset != null) {
@@ -1159,7 +1234,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         return "";
     }
 
-    public String processPaging(int page, int pageSize){
+    public String processPaging(int page, int pageSize) {
         StringBuilder queryBuilder = new StringBuilder();
 
         queryBuilder.append("&page=").append(page).append("&").append("pagesize=")
@@ -1169,21 +1244,19 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     }
 
     private void getUndFieldIfExists(JSONObject object, String field, ConnectorObjectBuilder builder, String subFieldName) {
-        if (object.has(field) && (object.opt(field) instanceof JSONObject))
-        {
+        if (object.has(field) && (object.opt(field) instanceof JSONObject)) {
 
 //            System.out.println("object.get(field) = " + object.opt(field).getClass());
 //            System.out.println("object.getJSONArray(field) = " + object.getJSONArray(field));
             //field_key_roles":[],"field_skype":[],"field_user_location":{"und":[{"tid":"179"}]}
             JSONArray und = object.getJSONObject(field).getJSONArray(UND);
-            if (und.length()>0){
+            if (und.length() > 0) {
                 if (und.getJSONObject(0).has(subFieldName)) {
                     String value = und.getJSONObject(0).getString(subFieldName);
                     addAttr(builder, field, value);
                     transformKeyToValue(builder, field, value, subFieldName);
                 }
-            }
-            else {
+            } else {
                 // send null
                 addAttr(builder, field, null);
             }
@@ -1191,49 +1264,45 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     }
 
     private void transformKeyToValue(ConnectorObjectBuilder builder, String fieldName, String value, String subFieldName) {
+        // taxonomy
         String machineName = getConfiguration().getUser2taxonomies().get(fieldName);
         if (machineName != null) { // need to transform
             String transformedValue = taxonomyCache.getName(machineName, value);
-            addAttr(builder, fieldName+TRANSFORMED_POSTFIX, transformedValue);
+            addAttr(builder, fieldName + TRANSFORMED_POSTFIX, transformedValue);
         }
-        //TODO support for nodes
+        // node
+        String type = getConfiguration().getUser2nodes().get(fieldName);
+        if (type != null) { // need to transform
+            String transformedValue = nodeCache.getName(type, value);
+            addAttr(builder, fieldName + TRANSFORMED_POSTFIX, transformedValue);
+        }
     }
 
     private void getIfExists(JSONObject object, String attrName, ConnectorObjectBuilder builder) {
-        if (object.has(attrName)){
-            if (object.get(attrName)!=null && !JSONObject.NULL.equals(object.get(attrName))) {
+        if (object.has(attrName)) {
+            if (object.get(attrName) != null && !JSONObject.NULL.equals(object.get(attrName))) {
                 addAttr(builder, attrName, object.getString(attrName));
             }
         }
     }
 
     private void getMultiIfExists(JSONObject object, String attrName, ConnectorObjectBuilder builder) {
-        if (object.has(attrName)){
+        if (object.has(attrName)) {
             Object valueObject = object.get(attrName);
-            if (object.get(attrName)!=null && !JSONObject.NULL.equals(valueObject)) {
+            if (object.get(attrName) != null && !JSONObject.NULL.equals(valueObject)) {
                 List<String> values = new ArrayList<>();
                 if (valueObject instanceof JSONArray) {
                     JSONArray objectArray = object.getJSONArray(attrName);
-                    for (int i = 0; i <objectArray.length(); i++) {
+                    for (int i = 0; i < objectArray.length(); i++) {
                         values.add(objectArray.getString(i));
                     }
                     builder.addAttribute(attrName, values.toArray());
                 } else if (valueObject instanceof String) {
                     addAttr(builder, attrName, object.getString(attrName));
-                }
-                else {
-                    throw new InvalidAttributeValueException("Unsupported value '"+valueObject+"' for attribute name '"+attrName+"' from "+object);
+                } else {
+                    throw new InvalidAttributeValueException("Unsupported value '" + valueObject + "' for attribute name '" + attrName + "' from " + object);
                 }
             }
-        }
-    }
-
-
-    private void initializeTaxonomyCache() {
-        try {
-            taxonomyCache = new TaxonomyCache(this);
-        } catch (IOException e) {
-            throw new ConnectorIOException("Error while initializing taxonomyCache: "+e.getMessage(), e);
         }
     }
 
