@@ -102,6 +102,11 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
      */
     private Boolean skipTestConnection = false;
 
+    /**
+     * if true, don't read user details when finding all users (Dry run reconcile tuning)
+     */
+    private Boolean dontReadUserDetailsWhenFindAllUsers = false;
+
     /* * * * * * * * * * * * * * * * * * *
     only parsed metadatas from configuration
      * * * * * * * * * * * * * * * * * * * */
@@ -357,6 +362,16 @@ public class DrupalConfiguration extends AbstractRestConfiguration {
 
     public void setSkipTestConnection(Boolean skipTestConnection) {
         this.skipTestConnection = skipTestConnection;
+    }
+
+    @ConfigurationProperty(displayMessageKey = "drupal.config.dontReadUserDetailsWhenFindAllUsers",
+            helpMessageKey = "drupal.config.dontReadUserDetailsWhenFindAllUsers.help")
+    public Boolean getDontReadUserDetailsWhenFindAllUsers() {
+        return dontReadUserDetailsWhenFindAllUsers;
+    }
+
+    public void setDontReadUserDetailsWhenFindAllUsers(Boolean dontReadUserDetailsWhenFindAllUsers) {
+        this.dontReadUserDetailsWhenFindAllUsers = dontReadUserDetailsWhenFindAllUsers;
     }
 
     @ConfigurationProperty(displayMessageKey = "drupal.config.createTaxonomyWhenNameNotExists",

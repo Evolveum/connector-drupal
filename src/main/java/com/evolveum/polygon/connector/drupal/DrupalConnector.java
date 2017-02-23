@@ -389,7 +389,19 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             } else if (err.has(ATTR_MAIL)) {
                 closeResponse(response);
                 throw new AlreadyExistsException(err.getString(ATTR_MAIL)); // The e-mail address test@evolveum.com is already taken.
+            } else if (err. has(ATTR_MAIL)) { // {"field_pub_team][und":"Team field is required."}
+                closeResponse(response);
+                throw new AlreadyExistsException(err.getString(ATTR_MAIL)); // The e-mail address test@evolveum.com is already taken.
             } else {
+                if (err != null && err.length()>0) {
+                    for (String key : err.keySet()){
+                        String value = err.getString(key);
+                        if (value!=null && value.contains("field is required.")) {
+                            closeResponse(response);
+                            throw new InvalidAttributeValueException("Missing mandatory attribute " + key+", full message: "+err);
+                        }
+                    }
+                }
                 closeResponse(response);
                 throw new ConnectorIOException("Error when process response: " + result);
             }
@@ -884,19 +896,19 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                 }// find by name
                 else if (query != null && query.byName != null) {
                     HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "?parameters[" + ATTR_NAME + "]=" + URLEncoder.encode(query.byName, "UTF-8"));
-                    handleUsers(request, handler, options);
+                    handleUsers(request, handler, options, false);
 
                     //find by emailAddress
                 } else if (query != null && query.byEmailAddress != null) {
                     HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "?parameters[" + ATTR_MAIL + "]=" + query.byEmailAddress);
-                    handleUsers(request, handler, options);
+                    handleUsers(request, handler, options, false);
 
                 } else {
                     // find required page
                     String pageing = processPageOptions(options);
                     if (!StringUtil.isEmpty(pageing)) {
                         HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "?" + pageing);
-                        handleUsers(request, handler, options);
+                        handleUsers(request, handler, options, false);
                     }
                     // find all
                     else {
@@ -905,7 +917,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
                         while (true) {
                             pageing = processPaging(page, pageSize);
                             HttpGet request = new HttpGet(getConfiguration().getServiceAddress() + USER + "?" + pageing);
-                            boolean finish = handleUsers(request, handler, options);
+                            boolean finish = handleUsers(request, handler, options, true);
                             if (finish) {
                                 break;
                             }
@@ -1025,7 +1037,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         }
     }
 
-    private boolean handleUsers(HttpGet request, ResultsHandler handler, OperationOptions options) throws IOException {
+    private boolean handleUsers(HttpGet request, ResultsHandler handler, OperationOptions options, boolean findAll) throws IOException {
         JSONArray users = callRequest(request);
         LOG.ok("Number of users: {0}, pageResultsOffset: {1}, pageSize: {2} ", users.length(), options == null ? "null" : options.getPagedResultsOffset(), options == null ? "null" : options.getPageSize());
 
@@ -1035,7 +1047,12 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
             }
             // only basic fields
             JSONObject user = users.getJSONObject(i);
-            if (getConfiguration().getUserMetadatas().size() > 1) {
+            if (this.getConfiguration().getDontReadUserDetailsWhenFindAllUsers() && findAll){
+                if (i % user.length() == 0) {
+                    LOG.ok("DontReadUserDetailsWhenFindAllUsers property is enabled and finnAll is catched - ignoring reading user details");
+                }
+            }
+            else if (getConfiguration().getUserMetadatas().size() > 1) {
                 // when using extended fields we need to get it each by one
                 HttpGet requestUserDetail = new HttpGet(getConfiguration().getServiceAddress() + USER + "/" + user.getString(UID));
                 user = callRequest(requestUserDetail, true);
@@ -1236,7 +1253,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
 
     public String processPaging(int page, int pageSize) {
         StringBuilder queryBuilder = new StringBuilder();
-
+        LOG.ok("creating paging with page: {0}, pageSize: {1}", page, pageSize);
         queryBuilder.append("&page=").append(page).append("&").append("pagesize=")
                 .append(pageSize);
 
