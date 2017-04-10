@@ -17,6 +17,8 @@ package com.evolveum.polygon.connector.drupal;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
+import org.apache.http.auth.AuthScope;
+import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.methods.*;
 import org.apache.http.entity.ByteArrayEntity;
 import org.apache.http.util.EntityUtils;
@@ -43,6 +45,7 @@ import javax.imageio.stream.ImageInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
@@ -113,7 +116,7 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     private static final String ATTR_FILE_STATUS_DEFAULT = "0";
     private static final String ATTR_FILE_FILE = "file";
 
-    private TaxonomyCache taxonomyCache;
+    public TaxonomyCache taxonomyCache;
 
     public NodeCache nodeCache;
 
@@ -318,6 +321,9 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         // don't log request here - password field !!!
         LOG.ok("request URI: {0}", request.getURI());
         request.setHeader("Content-Type", CONTENT_TYPE);
+
+        authHeader(request);
+
         HttpEntity entity = new ByteArrayEntity(jo.toString().getBytes("UTF-8"));
         request.setEntity(entity);
         CloseableHttpResponse response = execute(request);
@@ -333,6 +339,9 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
     protected JSONObject callRequest(HttpRequestBase request, boolean parseResult) throws IOException {
         LOG.ok("request URI: {0}", request.getURI());
         request.setHeader("Content-Type", CONTENT_TYPE);
+
+        authHeader(request);
+
         CloseableHttpResponse response = null;
         response = execute(request);
         LOG.ok("response: {0}", response);
@@ -348,9 +357,30 @@ public class DrupalConnector extends AbstractRestConnector<DrupalConfiguration> 
         return new JSONObject(result);
     }
 
+    private void authHeader(HttpRequestBase request){
+        // to prevent several calls http://stackoverflow.com/questions/20914311/httpclientbuilder-basic-auth
+        // auth header
+        final StringBuilder sb = new StringBuilder();
+        if (getConfiguration().getPassword() != null) {
+            getConfiguration().getPassword().access(new GuardedString.Accessor() {
+                @Override
+                public void access(char[] chars) {
+                    sb.append(new String(chars));
+                }
+            });
+        } else {
+            return;
+        }
+        byte[] credentials = org.apache.commons.codec.binary.Base64.encodeBase64((getConfiguration().getUsername() + ":" + sb.toString()).getBytes(StandardCharsets.UTF_8));
+        request.setHeader("Authorization", "Basic " + new String(credentials, StandardCharsets.UTF_8));
+    }
+
     protected JSONArray callRequest(HttpRequestBase request) throws IOException {
         LOG.ok("request URI: {0}", request.getURI());
         request.setHeader("Content-Type", CONTENT_TYPE);
+
+        authHeader(request);
+
         CloseableHttpResponse response = execute(request);
         LOG.ok("response: {0}", response);
         processDrupalResponseErrors(response);

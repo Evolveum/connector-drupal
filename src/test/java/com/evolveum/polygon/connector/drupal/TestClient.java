@@ -102,6 +102,12 @@ public class TestClient {
             String[] requiredFields = properties.getProperty("requiredFields").split(";");
             conf.setRequiredFields(requiredFields);
         }
+
+        if (properties.containsKey("dontReadUserDetailsWhenFindAllUsers")) {
+            conf.setDontReadUserDetailsWhenFindAllUsers(Boolean.parseBoolean(properties.getProperty("dontReadUserDetailsWhenFindAllUsers")));
+        }
+
+
         conn = new DrupalConnector();
         conn.init(conf);
     }
@@ -110,6 +116,27 @@ public class TestClient {
     public void testConn() {
         conn.test();
     }
+
+    @Test
+    public void testManyOperations() throws IOException {
+        conn.init(conf);
+//        for (int i=0; i<100; i++) {
+//            conn.taxonomyCache.clear();
+//            conn.nodeCache.clear();
+//            conn.taxonomyCache = new TaxonomyCache(conn);
+//            conn.nodeCache = new NodeCache(conn);
+//        }
+
+        HttpGet request = new HttpGet("https://localhost:4443/rest/taxonomy_term?parameters[vid]=1&page=0&pagesize=100&fields=tid,name");
+        JSONArray taxonomies = conn.callRequest(request);
+        for (int i=0; i<taxonomies.length(); i++){
+            JSONObject taxonomy = taxonomies.getJSONObject(i);
+            String key = taxonomy.getString(conn.TID);
+            HttpGet request2 = new HttpGet("https://localhost:4443/rest/taxonomy_term/"+key);
+            conn.callRequest(request2, false);
+        }
+    }
+
 
     @Test
     public void testSchema() {
@@ -623,4 +650,21 @@ public class TestClient {
 //        HttpResponse resp = client.execute(req);
 //        LOG.info("resp: {0}", resp);
 //    }
+
+    @Test
+    public void testUpdateAdminPassword() {
+
+        Uid uid = new Uid("1");
+        //create
+        Set<Attribute> attributes = new HashSet<Attribute>();
+        String randName = "admin";// + (new Random()).nextInt();
+        attributes.add(AttributeBuilder.build(Name.NAME, randName));
+        GuardedString gs = new GuardedString("*BnqpL&nel1i".toCharArray());
+        attributes.add(AttributeBuilder.build(OperationalAttributeInfos.PASSWORD.getName(), gs));
+
+        //attributes.add(AttributeBuilder.build(OperationalAttributeInfos.ENABLE.getName(), true/**/));
+
+        Uid userUid = conn.update(accountObjectClass, uid, attributes, null);
+        LOG.ok("User {0} updated", userUid.getUidValue());
+    }
 }
